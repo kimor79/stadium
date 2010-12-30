@@ -1,0 +1,4 @@
+Stadium is where all montoring sources (like check_scheduler)
+submit their monitoring data.
+
+Data is then presented in a nice easy to view format.
