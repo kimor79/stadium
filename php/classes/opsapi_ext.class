@@ -1,0 +1,91 @@
+<?php
+
+require('Ops/api.class');
+
+class OpsApiMon extends OpsApi {
+
+	/**
+	 * Sort data by priority, state, date
+	 * @param array $data
+	 * @return array
+	 */
+	public function sortData_current ($data) {
+		$sortcol = $this->getSort($data);
+		$sortdir = $this->getDir();
+
+		$ack_time = array();
+		$column = array();
+		$date = array();
+		$priority = array();
+		$state = array();
+
+		foreach ($data as $key => $row) {
+			if(!array_key_exists($sortcol, $row)) {
+				return $data;
+			}
+
+			if(array_key_exists('services.priority', $row)) {
+				$priority[$key] = $row['services.priority'];
+			} else {
+				$priority[$key] = 1;
+			}
+
+			if(array_key_exists('service_nodes.priority', $row) && !is_null($row['service_nodes.priority'])) {
+				$priority[$key] = $row['service_nodes.priority'];
+			}
+
+			if(empty($row['service_nodegroup_nodes.enabled'])) {
+				if(array_key_exists('service_nodegroups.priority', $row) && !is_null($row['service_nodegroups.priority'])) {
+					$priority[$key] = $row['service_nodegroups.priority'];
+				}
+			}
+
+			if(array_key_exists('current_states.state', $row)) {
+				$state[$key] = $row['current_states.state'];
+			} else {
+				$state[$key] = 1;
+			}
+
+			if(array_key_exists('current_states.c_time', $row)) {
+				$date[$key] = $row['current_states.c_time'];
+			} else {
+				$date[$key] = 1;
+			}
+
+			if(array_key_exists('acknowledgements.c_time', $row)) {
+				$ack_time[$key] = $row['acknowledgements.c_time'];
+			} else {
+				$ack_time[$key] = 1;
+			}
+
+			$column[$key] = $row[$sortcol];
+		}
+
+		$r_sort = SORT_DESC;
+		switch($sortdir) {
+			case 'asc':
+				$r_sort = SORT_ASC;
+				break;
+			case 'desc':
+				$r_sort = SORT_DESC;
+				break;
+		}
+
+		switch($sortcol) {
+			case 'current_states.c_time':
+				array_multisort($date, $r_sort, $priority, SORT_DESC, $ack_time, SORT_ASC, $state, SORT_DESC, $data);
+				break;
+			case 'current_states.state':
+				array_multisort($state, $r_sort, $ack_time, SORT_ASC, $priority, SORT_DESC, $date, SORT_ASC, $data);
+				break;
+			case 'services.priority':
+				array_multisort($priority, $r_sort, $ack_time, SORT_ASC, $state, SORT_DESC, $date, SORT_ASC, $data);
+				break;
+			default:
+				array_multisort($column, $r_sort, $priority, SORT_DESC, $ack_time, SORT_ASC, $state, SORT_DESC, $date, SORT_ASC, $data);
+		}
+
+		return $data;
+	}
+}
+?>

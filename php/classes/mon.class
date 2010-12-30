@@ -1,0 +1,1114 @@
+<?php
+/**
+ * Monitoring methods
+ * @author Kimo Rosenbaum <kimor79@yahoo.com>
+ * @version $Id$
+ * @package Monitoring
+ */
+
+class OpsMon {
+
+	public $states = array(
+		0 => 'OK',
+		1 => 'WARNING',
+		2 => 'CRITICAL',
+		3 => 'UNKNOWN',
+	);
+
+	public $wiki_link = 'https://wiki.com/';
+
+	/**
+	 * List check history
+	 * @param array $search Associative array of fields/values to search for
+	 * @param array $params Associative array of sort/limit
+	 * @return array Array of checks, error message (if any)
+	 */
+	public function listCheckHistory($search = array(), $params = array()) {
+		$columns = array();
+		$count = 0;
+		$details = array();
+		$error = false;
+		$query_opts = array();
+		$query_select = array();
+		$query_str = '';
+		$query_where = '';
+
+		$columns['check_history'] = get_column_names('check_history');
+		$columns['services'] = array('service_name' => 'service_name');
+
+		if(!empty($search)) {
+			$available_fields = array_merge(
+				$columns['check_history'],
+				$columns['services']
+			);
+
+			foreach($search as $field => $value) {
+				if(array_key_exists($field, $available_fields)) {
+					if(is_array($value)) {
+						if(empty($value)) {
+							continue;
+						}
+						$values = array();
+						foreach($value as $t_value) {
+							$values[] = sprintf("'%s'",
+								mysql_real_escape_string($t_value));
+						}
+						$query_opts[] = sprintf("`%s` IN (%s)", $field,
+							implode(',', $values));
+					} else {
+						$query_opts[] = sprintf("`%s` LIKE '%s'", $field,
+							mysql_real_escape_string($value));
+					}
+				} else {
+					switch($field) {
+						case 'q_start_time':
+							$query_opts[] = sprintf("`c_time` >= '%d'",
+								mysql_real_escape_string($value));
+							break;
+						case 'q_finish_time':
+							$query_opts[] = sprintf("`c_time` <= '%d'",
+								mysql_real_escape_string($value));
+							break;
+					}
+				}
+			}
+		}
+
+		if(!array_key_exists('c_time', $search) && !array_key_exists('q_finish_time', $search)) {
+			$query_opts[] = sprintf("`c_time` <= '%d'", time());
+		}
+
+		if(!empty($query_opts)) {
+			$query_where = ' WHERE ' . implode(' AND ', $query_opts);
+			$query_str = $query_where;
+		}
+
+		if(array_key_exists('sort', $params)) {
+			$query_str .= ' ORDER BY ' . $params['sort'];
+
+			if(array_key_exists('dir', $params) && $params['dir'] == 'asc') {
+				$query_str .= ' ASC';
+			} else {
+				$query_str .= ' DESC';
+			}
+		}
+
+		if(array_key_exists('results', $params)) {
+			$query_str .= ' LIMIT ';
+			if(array_key_exists('startIndex', $params)) {
+				$query_str .= $params['startIndex'] . ',';
+			}
+
+			$query_str .= $params['results'];
+		}
+
+		foreach($columns as $table => $t_columns) {
+			foreach($t_columns as $column) {
+				$query_select[] = sprintf("`%s`.`%s` AS `%s.%s`", $table, $column, $table, $column);
+			}
+		}
+
+		$query = 'SELECT ' . implode(', ', $query_select) . '
+			FROM `check_history`
+			LEFT JOIN `services` USING (`service_id`)';
+		$query .= $query_str;
+		$result = do_mysql_query($query);
+
+		if($result[0] === true) {
+			while($line = mysql_fetch_assoc($result[1])) {
+				ksort($line);
+				$details[] = $line;
+			}
+
+			$c_query = 'SELECT COUNT(`c_time`) AS `found` FROM `check_history`';
+			$c_query .= $query_where;
+			$c_result = do_mysql_query($c_query);
+
+			if($c_result[0] === true) {
+				while($line = mysql_fetch_assoc($c_result[1])) {
+					$count = $line['found'];
+				}
+			} else {
+				$error = $c_result[1];
+			}
+		} else {
+			$error = $result[1];
+		}
+
+		return array($details, $count, $error);
+	}
+
+	/**
+	 * List service/nodegroup current states by node
+	 * @param array $params Associative array of fields/values to search for
+	 * @return array Array of states, error message (if any)
+	 */
+	public function listCurrentStatesNodegroupNodes($search = array()) {
+		$columns = array();
+		$details = array();
+		$error = false;
+		$query_opts = array();
+		$query_select = array();
+		$query_str = '';
+
+		$columns['acknowledgements'] = get_column_names('acknowledgements');
+		$columns['check_commands'] = get_column_names('check_commands');
+		$columns['current_states'] = get_column_names('current_states');
+		$columns['nodegroup_nodes'] = get_column_names('nodegroup_nodes');
+		$columns['nodegroups'] = get_column_names('nodegroups');
+		$columns['nodes'] = get_column_names('nodes');
+		$columns['services'] = get_column_names('services');
+		$columns['service_nodegroup_nodes'] = get_column_names('service_nodegroup_nodes');
+		$columns['service_nodegroups'] = get_column_names('service_nodegroups');
+
+		if(!empty($search)) {
+			$available_fields = array_merge(
+				$columns['acknowledgements'],
+				$columns['check_commands'],
+				$columns['current_states'],
+				$columns['nodegroup_nodes'],
+				$columns['nodegroups'],
+				$columns['nodes'],
+				$columns['services'],
+				$columns['service_nodegroup_nodes'],
+				$columns['service_nodegroups']
+			);
+
+			foreach($search as $field => $value) {
+				if(array_key_exists($field, $available_fields)) {
+					switch($field) {
+						case 'check_command':
+							$field = 'check_commands`.`check_command';
+							break;
+						case 'node':
+							$field = 'current_states`.`node';
+							break;
+						case 'service_id':
+							$field = 'current_states`.`service_id';
+							break;
+					}
+
+					if(is_array($value)) {
+						if(empty($value)) {
+							continue;
+						}
+						$values = array();
+						foreach($value as $t_value) {
+							$values[] = sprintf("'%s'",
+								mysql_real_escape_string($t_value));
+						}
+						$query_opts[] = sprintf("`%s` IN (%s)", $field,
+							implode(',', $values));
+					} else {
+						$query_opts[] = sprintf("`%s` LIKE '%s'", $field,
+							mysql_real_escape_string($value));
+					}
+				}
+			}
+		}
+
+		if(!empty($query_opts)) {
+			$query_str = ' WHERE ' . implode(' AND ', $query_opts);
+		}
+
+		foreach($columns as $table => $t_columns) {
+			foreach($t_columns as $column) {
+				$query_select[] = sprintf("`%s`.`%s` AS `%s.%s`", $table, $column, $table, $column);
+			}
+		}
+
+		$query = 'SELECT ' . implode(', ', $query_select) . '
+			FROM `current_states`
+			LEFT JOIN `nodegroup_nodes` USING (`node`)
+			LEFT JOIN `nodes` USING (`node`)
+			LEFT JOIN `services` USING (`service_id`)
+			LEFT JOIN `check_commands` ON `services`.`check_command` = `check_commands`.`check_command`
+			LEFT JOIN `nodegroups` ON `nodegroup_nodes`.`nodegroup` = `nodegroups`.`nodegroup`
+			LEFT JOIN `acknowledgements` ON (`current_states`.`node` = `acknowledgements`.`node`
+			AND `current_states`.`c_time` <= `acknowledgements`.`c_time` AND (
+			`current_states`.`service_id` = `acknowledgements`.`service_id` OR `acknowledgements`.`service_id` = 0))
+			INNER JOIN `service_nodegroups` ON (`nodegroup_nodes`.`nodegroup` = `service_nodegroups`.`nodegroup`
+			AND `current_states`.`service_id` = `service_nodegroups`.`service_id`)
+			LEFT JOIN `service_nodegroup_nodes` ON (`nodegroup_nodes`.`nodegroup` = `service_nodegroup_nodes`.`nodegroup`
+			AND `current_states`.`node` = `service_nodegroup_nodes`.`node`
+			AND `current_states`.`service_id` = `service_nodegroup_nodes`.`service_id`)';
+		$query .= $query_str;
+		$result = do_mysql_query($query);
+
+		if($result[0] === true) {
+			while($line = mysql_fetch_assoc($result[1])) {
+				ksort($line);
+				$key = $line['current_states.node'] . $line['current_states.service_id']
+				. $line['current_states.entity'] . $line['current_states.monitor'];
+				$details[$key] = $line;
+			}
+		} else {
+			$error = $result[1];
+		}
+
+		return array($details, $error);
+	}
+
+	/**
+	 * List service/node current states
+	 * @param array $params Associative array of fields/values to search for
+	 * @return array Array of states, error message (if any)
+	 */
+	public function listCurrentStatesNodes($search = array()) {
+		$columns = array();
+		$details = array();
+		$error = false;
+		$query_opts = array();
+		$query_select = array();
+		$query_str = '';
+
+		$columns['acknowledgements'] = get_column_names('acknowledgements');
+		$columns['check_commands'] = get_column_names('check_commands');
+		$columns['current_states'] = get_column_names('current_states');
+		$columns['nodes'] = get_column_names('nodes');
+		$columns['services'] = get_column_names('services');
+		$columns['service_nodes'] = get_column_names('service_nodes');
+
+		if(!empty($search)) {
+			$available_fields = array_merge(
+				$columns['acknowledgements'],
+				$columns['check_commands'],
+				$columns['current_states'],
+				$columns['nodes'],
+				$columns['services'],
+				$columns['service_nodes']
+			);
+
+			foreach($search as $field => $value) {
+				if(array_key_exists($field, $available_fields)) {
+					switch($field) {
+						case 'check_command':
+							$field = 'check_commands`.`check_command';
+							break;
+						case 'node':
+							$field = 'current_states`.`node';
+							break;
+						case 'service_id':
+							$field = 'current_states`.`service_id';
+							break;
+					}
+
+					if(is_array($value)) {
+						if(empty($value)) {
+							continue;
+						}
+						$values = array();
+						foreach($value as $t_value) {
+							$values[] = sprintf("'%s'",
+								mysql_real_escape_string($t_value));
+						}
+						$query_opts[] = sprintf("`%s` IN (%s)", $field,
+							implode(',', $values));
+					} else {
+						$query_opts[] = sprintf("`%s` LIKE '%s'", $field,
+							mysql_real_escape_string($value));
+					}
+				}
+			}
+		}
+
+		if(!empty($query_opts)) {
+			$query_str = ' WHERE ' . implode(' AND ', $query_opts);
+		}
+
+		foreach($columns as $table => $t_columns) {
+			foreach($t_columns as $column) {
+				$query_select[] = sprintf("`%s`.`%s` AS `%s.%s`", $table, $column, $table, $column);
+			}
+		}
+
+		$query = 'SELECT ' . implode(', ', $query_select) . '
+			FROM `current_states`
+			LEFT JOIN `nodes` USING (`node`)
+			INNER JOIN `service_nodes` USING (`service_id`, `node`)
+			LEFT JOIN `services` USING (`service_id`)
+			LEFT JOIN `acknowledgements` ON (`current_states`.`node` = `acknowledgements`.`node`
+			AND `current_states`.`c_time` <= `acknowledgements`.`c_time` AND (
+			`current_states`.`service_id` = `acknowledgements`.`service_id` OR `acknowledgements`.`service_id` = 0))
+			LEFT JOIN `check_commands` ON `services`.`check_command` = `check_commands`.`check_command`';
+		$query .= $query_str;
+		$result = do_mysql_query($query);
+
+		if($result[0] === true) {
+			while($line = mysql_fetch_assoc($result[1])) {
+				ksort($line);
+				$key = $line['current_states.node'] . $line['current_states.service_id']
+				. $line['current_states.entity'] . $line['current_states.monitor'];
+				$details[$key] = $line;
+			}
+		} else {
+			$error = $result[1];
+		}
+
+		return array($details, $error);
+	}
+
+	/**
+	 * List nodegroups with service counts
+	 * @param array $params Associative array of fields/values to search for
+	 * @return array Array of nodegroups, error message (if any)
+	 */
+	public function listNodegroupsServiceCount($search = array()) {
+		$columns = array();
+		$details = array();
+		$error = false;
+		$query_opts = array();
+		$query_select = array();
+		$query_str = '';
+
+		$columns['nodegroups'] = get_column_names('nodegroups');
+		$columns['service_nodegroups'] = get_column_names('service_nodegroups');
+
+		if(!empty($search)) {
+			$available_fields = array_merge(
+				$columns['nodegroups'],
+				$columns['service_nodegroups']
+			);
+
+			foreach($search as $field => $value) {
+				if(array_key_exists($field, $available_fields)) {
+					switch($field) {
+						case 'check_command':
+							$field = 'check_commands`.`check_command';
+							break;
+						case 'service_id':
+							$field = 'services`.`service_id';
+							break;
+					}
+
+					if(is_array($value)) {
+						if(empty($value)) {
+							continue;
+						}
+						$values = array();
+						foreach($value as $t_value) {
+							$values[] = sprintf("'%s'",
+								mysql_real_escape_string($t_value));
+						}
+						$query_opts[] = sprintf("`%s` IN (%s)", $field,
+							implode(',', $values));
+					} else {
+						$query_opts[] = sprintf("`%s` LIKE '%s'", $field,
+							mysql_real_escape_string($value));
+					}
+				}
+			}
+		}
+
+		if(!empty($query_opts)) {
+			$query_str = ' WHERE ' . implode(' AND ', $query_opts);
+		}
+
+		$query = 'SELECT `nodegroups`.*, COUNT(`service_nodegroups`.`nodegroup`) AS `services`
+			FROM `nodegroups`
+			LEFT JOIN `service_nodegroups` USING (`nodegroup`)';
+		$query .= $query_str;
+		$query .= ' GROUP BY `nodegroups`.`nodegroup`';
+		$result = do_mysql_query($query);
+
+		if($result[0] === true) {
+			while($line = mysql_fetch_assoc($result[1])) {
+				ksort($line);
+				$details[] = $line;
+			}
+		} else {
+			$error = $result[1];
+		}
+
+		return array($details, $error);
+	}
+
+	/**
+	 * List nodes with service counts
+	 * @param array $params Associative array of fields/values to search for
+	 * @return array Array of nodes, error message (if any)
+	 */
+	public function listNodesServiceCount($search = array()) {
+		$columns = array();
+		$details = array();
+		$error = false;
+		$n_details = array();
+		$query_opts = array();
+		$query_str = '';
+
+		$columns['nodegroup_nodes'] = get_column_names('nodegroup_nodes');
+		$columns['nodes'] = get_column_names('nodes');
+		$columns['service_nodegroups'] = get_column_names('service_nodegroups');
+		$columns['service_nodes'] = get_column_names('service_nodes');
+
+		if(!empty($search)) {
+			$available_fields = array_merge(
+				$columns['nodegroup_nodes'],
+				$columns['nodes'],
+				$columns['service_nodegroups'],
+				$columns['service_nodes']
+			);
+
+			foreach($search as $field => $value) {
+				if(array_key_exists($field, $available_fields)) {
+					if(is_array($value)) {
+						if(empty($value)) {
+							continue;
+						}
+						$values = array();
+						foreach($value as $t_value) {
+							$values[] = sprintf("'%s'",
+								mysql_real_escape_string($t_value));
+						}
+						$query_opts[] = sprintf("`%s` IN (%s)", $field,
+							implode(',', $values));
+					} else {
+						$query_opts[] = sprintf("`%s` LIKE '%s'", $field,
+							mysql_real_escape_string($value));
+					}
+				}
+			}
+		}
+
+		if(!empty($query_opts)) {
+			$query_str = ' WHERE ' . implode(' AND ', $query_opts);
+		}
+
+		// TODO: make this one query
+
+		$n_query = 'SELECT `nodes`.*, COUNT(`service_nodes`.`service_id`) AS `services`
+			FROM `nodes`
+			LEFT JOIN `service_nodes` USING (`node`)';
+		$n_query .= $query_str;
+		$n_query .= ' GROUP BY `node`';
+		$n_result = do_mysql_query($n_query);
+
+		if($n_result[0] === true) {
+			while($line = mysql_fetch_assoc($n_result[1])) {
+				$n_details[$line['node']] = $line;
+				$n_details[$line['node']]['inherited'] = 0;
+			}
+		} else {
+			$error = $n_result[1];
+		}
+
+		$g_query = 'SELECT `node`, COUNT(`service_nodegroups`.`service_id`) AS `inherited`
+			FROM `nodes`
+			LEFT JOIN `nodegroup_nodes` USING (`node`)
+			LEFT JOIN `service_nodegroups` ON `nodegroup_nodes`.`nodegroup` = `service_nodegroups`.`nodegroup`';
+		$g_query .= $query_str;
+		$g_query .= ' GROUP BY `node`';
+		$g_result = do_mysql_query($g_query);
+
+		if($g_result[0] === true) {
+			while($line = mysql_fetch_assoc($g_result[1])) {
+				$n_details[$line['node']]['inherited'] = $line['inherited'];
+			}
+		} else {
+			$error .= $g_result[1];
+		}
+
+		$details = array_values($n_details);
+
+		return array($details, $error);
+	}
+
+	/**
+	 * List service/node direct mappings
+	 * @param array $params Associative array of fields/values to search for
+	 * @return array Array of mappings, error message (if any)
+	 */
+	public function listServicesNodes($search = array()) {
+		$columns = array();
+		$details = array();
+		$error = false;
+		$query_opts = array();
+		$query_select = array();
+		$query_str = '';
+
+		$columns['check_commands'] = get_column_names('check_commands');
+		$columns['nodes'] = get_column_names('nodes');
+		$columns['services'] = get_column_names('services');
+		$columns['service_nodes'] = get_column_names('service_nodes');
+
+		if(!empty($search)) {
+			$available_fields = array_merge(
+				$columns['check_commands'],
+				$columns['nodes'],
+				$columns['services'],
+				$columns['service_nodes']
+			);
+
+			foreach($search as $field => $value) {
+				if(array_key_exists($field, $available_fields)) {
+					switch($field) {
+						case 'check_command':
+							$field = 'check_commands`.`check_command';
+							break;
+					}
+
+					if(is_array($value)) {
+						if(empty($value)) {
+							continue;
+						}
+						$values = array();
+						foreach($value as $t_value) {
+							$values[] = sprintf("'%s'",
+								mysql_real_escape_string($t_value));
+						}
+						$query_opts[] = sprintf("`%s` IN (%s)", $field,
+							implode(',', $values));
+					} else {
+						$query_opts[] = sprintf("`%s` LIKE '%s'", $field,
+							mysql_real_escape_string($value));
+					}
+				}
+			}
+		}
+
+		if(!empty($query_opts)) {
+			$query_str = ' WHERE ' . implode(' AND ', $query_opts);
+		}
+
+		foreach($columns as $table => $t_columns) {
+			foreach($t_columns as $column) {
+				$query_select[] = sprintf("`%s`.`%s` AS `%s.%s`", $table, $column, $table, $column);
+			}
+		}
+
+		$query = 'SELECT ' . implode(', ', $query_select) . '
+			FROM `service_nodes`
+			LEFT JOIN `services` USING (`service_id`)
+			LEFT JOIN `nodes` USING (`node`)
+			LEFT JOIN `check_commands` ON `services`.`check_command` = `check_commands`.`check_command`';
+		$query .= $query_str;
+		$result = do_mysql_query($query);
+
+		if($result[0] === true) {
+			while($line = mysql_fetch_assoc($result[1])) {
+				ksort($line);
+				$details[] = $line;
+			}
+		} else {
+			$error = $result[1];
+		}
+
+		return array($details, $error);
+	}
+
+	/**
+	 * Return nodegroup/service node overrides
+	 * @param array $params Associative array of fields/values to search for
+	 * @return array Array of nodes, error message (if any)
+	 */
+	public function listNodegroupNodeOverrides($search = array()) {
+		$columns = array();
+		$details = array();
+		$error = false;
+		$query_opts = array();
+		$query_select = array();
+		$query_str = '';
+
+		$columns['check_commands'] = get_column_names('check_commands');
+		$columns['service_nodegroup_nodes'] = get_column_names('service_nodegroup_nodes');
+		$columns['services'] = get_column_names('services');
+
+		if(!empty($search)) {
+			$available_fields = array_merge(
+				$columns['check_commands'],
+				$columns['service_nodegroup_nodes'],
+				$columns['services']
+			);
+
+			foreach($search as $field => $value) {
+				if(array_key_exists($field, $available_fields)) {
+					switch($field) {
+						case 'check_command':
+							$field = 'check_commands`.`check_command';
+							break;
+					}
+					if(is_array($value)) {
+						if(empty($value)) {
+							continue;
+						}
+						$values = array();
+						foreach($value as $t_value) {
+							$values[] = sprintf("'%s'",
+								mysql_real_escape_string($t_value));
+						}
+						$query_opts[] = sprintf("`%s` IN (%s)", $field,
+							implode(',', $values));
+					} else {
+						$query_opts[] = sprintf("`%s` LIKE '%s'", $field,
+							mysql_real_escape_string($value));
+					}
+				}
+			}
+		}
+
+		if(!empty($query_opts)) {
+			$query_str = ' WHERE ' . implode(' AND ', $query_opts);
+		}
+
+		foreach($columns as $table => $t_columns) {
+			foreach($t_columns as $column) {
+				$query_select[] = sprintf("`%s`.`%s` AS `%s.%s`", $table, $column, $table, $column);
+			}
+		}
+
+		$query = 'SELECT ' . implode(', ', $query_select) . '
+			FROM `service_nodegroup_nodes`
+			LEFT JOIN `services` USING (`service_id`)
+			LEFT JOIN `check_commands` ON `services`.`check_command` = `check_commands`.`check_command`';
+		$query .= $query_str;
+		$result = do_mysql_query($query);
+
+		if($result[0] === true) {
+			while($line = mysql_fetch_assoc($result[1])) {
+				ksort($line);
+				$details[] = $line;
+			}
+		} else {
+			$error = $result[1];
+		}
+
+		return array($details, $error);
+	}
+
+	/**
+	 * List inherited services for nodes
+	 * @param array $params Associative array of fields/values to search for
+	 * @return array Array of services, error message (if any)
+	 */
+	public function listInheritedServices($search = array()) {
+		$columns = array();
+		$details = array();
+		$error = false;
+		$query_opts = array();
+		$query_select = array();
+		$query_str = '';
+
+		$columns['check_commands'] = get_column_names('check_commands');
+		$columns['nodegroup_nodes'] = get_column_names('nodegroup_nodes');
+		$columns['nodegroups'] = get_column_names('nodegroups');
+		$columns['nodes'] = get_column_names('nodes');
+		$columns['services'] = get_column_names('services');
+		$columns['service_nodegroup_nodes'] = get_column_names('service_nodegroup_nodes');
+		$columns['service_nodegroups'] = get_column_names('service_nodegroups');
+
+		if(!empty($search)) {
+			$available_fields = array_merge(
+				$columns['check_commands'],
+				$columns['nodegroup_nodes'],
+				$columns['nodegroups'],
+				$columns['nodes'],
+				$columns['services'],
+				$columns['service_nodegroup_nodes'],
+				$columns['service_nodegroups']
+			);
+
+			foreach($search as $field => $value) {
+				if(array_key_exists($field, $available_fields)) {
+					switch($field) {
+						case 'check_command':
+							$field = 'check_commands`.`check_command';
+							break;
+						case 'node':
+							$field = 'nodegroup_nodes`.`node';
+							break;
+						case 'nodegroup':
+							$field = 'nodegroup_nodes`.`nodegroup';
+							break;
+						case 'service_id':
+							$field = 'services`.`service_id';
+							break;
+					}
+
+					if(is_array($value)) {
+						if(empty($value)) {
+							continue;
+						}
+						$values = array();
+						foreach($value as $t_value) {
+							$values[] = sprintf("'%s'",
+								mysql_real_escape_string($t_value));
+						}
+						$query_opts[] = sprintf("`%s` IN (%s)", $field,
+							implode(',', $values));
+					} else {
+						$query_opts[] = sprintf("`%s` LIKE '%s'", $field,
+							mysql_real_escape_string($value));
+					}
+				}
+			}
+		}
+
+		if(!empty($query_opts)) {
+			$query_str = ' WHERE ' . implode(' AND ', $query_opts);
+		}
+
+		foreach($columns as $table => $t_columns) {
+			foreach($t_columns as $column) {
+				$query_select[] = sprintf("`%s`.`%s` AS `%s.%s`", $table, $column, $table, $column);
+			}
+		}
+
+		$query = 'SELECT ' . implode(', ', $query_select) . '
+			FROM `service_nodegroups`
+			LEFT JOIN `services` USING (`service_id`)
+			LEFT JOIN `nodegroup_nodes` USING (`nodegroup`)
+			LEFT JOIN `nodegroups` USING (`nodegroup`)
+			LEFT JOIN `service_nodegroup_nodes` ON (`nodegroup_nodes`.`node` = `service_nodegroup_nodes`.`node`
+			AND `nodegroup_nodes`.`nodegroup` = `service_nodegroup_nodes`.`nodegroup`)
+			LEFT JOIN `nodes` ON `nodegroup_nodes`.`node` = `nodes`.`node`
+			LEFT JOIN `check_commands` ON `services`.`check_command` = `check_commands`.`check_command`';
+		$query .= $query_str;
+		$query .= ' GROUP BY `service_nodegroups`.`nodegroup`, `service_nodegroups`.`service_id`, `nodegroup_nodes`.`node`';
+		$result = do_mysql_query($query);
+
+		if($result[0] === true) {
+			while($line = mysql_fetch_assoc($result[1])) {
+				ksort($line);
+				$details[] = $line;
+			}
+		} else {
+			$error = $result[1];
+		}
+
+		return array($details, $error);
+	}
+
+	/**
+	 * List service/nodegroup direct mappings
+	 * @param array $params Associative array of fields/values to search for
+	 * @return array Array of mappings, error message (if any)
+	 */
+	public function listServicesNodegroups($search = array()) {
+		$columns = array();
+		$details = array();
+		$error = false;
+		$query_opts = array();
+		$query_select = array();
+		$query_str = '';
+
+		$columns['check_commands'] = get_column_names('check_commands');
+		$columns['nodegroups'] = get_column_names('nodegroups');
+		$columns['services'] = get_column_names('services');
+		$columns['service_nodegroups'] = get_column_names('service_nodegroups');
+
+		if(!empty($search)) {
+			$available_fields = array_merge(
+				$columns['check_commands'],
+				$columns['nodegroups'],
+				$columns['services'],
+				$columns['service_nodegroups']
+			);
+
+			foreach($search as $field => $value) {
+				if(array_key_exists($field, $available_fields)) {
+					switch($field) {
+						case 'check_command':
+							$field = 'check_commands`.`check_command';
+							break;
+					}
+
+					if(is_array($value)) {
+						if(empty($value)) {
+							continue;
+						}
+						$values = array();
+						foreach($value as $t_value) {
+							$values[] = sprintf("'%s'",
+								mysql_real_escape_string($t_value));
+						}
+						$query_opts[] = sprintf("`%s` IN (%s)", $field,
+							implode(',', $values));
+					} else {
+						$query_opts[] = sprintf("`%s` LIKE '%s'", $field,
+							mysql_real_escape_string($value));
+					}
+				}
+			}
+		}
+
+		if(!empty($query_opts)) {
+			$query_str = ' WHERE ' . implode(' AND ', $query_opts);
+		}
+
+		foreach($columns as $table => $t_columns) {
+			foreach($t_columns as $column) {
+				$query_select[] = sprintf("`%s`.`%s` AS `%s.%s`", $table, $column, $table, $column);
+			}
+		}
+
+		$query = 'SELECT ' . implode(', ', $query_select) . '
+			FROM `service_nodegroups`
+			LEFT JOIN `services` USING (`service_id`)
+			LEFT JOIN `nodegroups` USING (`nodegroup`)
+			LEFT JOIN `check_commands` ON `services`.`check_command` = `check_commands`.`check_command`';
+		$query .= $query_str;
+		$result = do_mysql_query($query);
+
+		if($result[0] === true) {
+			while($line = mysql_fetch_assoc($result[1])) {
+				ksort($line);
+				$details[] = $line;
+			}
+		} else {
+			$error = $result[1];
+		}
+
+		return array($details, $error);
+	}
+
+	/**
+	 * List services
+	 * @param array $params Associative array of fields/values to search for
+	 * @return array Array of services, error message (if any)
+	 */
+	public function listServices($search = array()) {
+		$details = array();
+		$error = false;
+		$query_opts = array();
+		$query_str = '';
+
+		if(!empty($search)) {
+			$available_fields = array_merge(
+				get_column_names('check_commands'),
+				get_column_names('services')
+			);
+
+			foreach($search as $field => $value) {
+				if(array_key_exists($field, $available_fields)) {
+					$query_opts[] = sprintf("`%s` LIKE '%s'", $field,
+						mysql_real_escape_string($value));
+				}
+			}
+		}
+
+		if(!empty($query_opts)) {
+			$query_str = ' WHERE ' . implode(' AND ', $query_opts);
+		}
+
+		$query = 'SELECT * FROM `services`
+			LEFT JOIN `check_commands` USING (`check_command`)';
+		$query .= $query_str;
+		$result = do_mysql_query($query);
+
+		if($result[0] === true) {
+			while($line = mysql_fetch_assoc($result[1])) {
+				ksort($line);
+				$details[] = $line;
+			}
+		} else {
+			$error = $result[1];
+		}
+
+		return array($details, $error);
+	}
+
+	/**
+	 * Return list of available nodegroups/nodes
+	 * @param array $params Associative array of fields/values to search for
+	 * @return array Array of nodegroups/nodes, error (if any)
+	 */
+	public function listNodegroupNodes($search = array()) {
+		$details = array();
+		$error = false;
+		$query_opts = array();
+		$query_str = '';
+
+		if(!empty($search)) {
+			$available_fields = get_column_names('nodegroup_nodes');
+
+			foreach($search as $field => $value) {
+				if(array_key_exists($field, $available_fields)) {
+					if(is_array($value)) {
+						if(empty($value)) {
+							continue;
+						}
+						$values = array();
+						foreach($value as $t_value) {
+							$values[] = sprintf("'%s'",
+								mysql_real_escape_string($t_value));
+						}
+						$query_opts[] = sprintf("`%s` IN (%s)", $field,
+							implode(',', $values));
+					} else {
+						$query_opts[] = sprintf("`%s` LIKE '%s'", $field,
+							mysql_real_escape_string($value));
+					}
+				}
+			}
+		}
+
+		if(!empty($query_opts)) {
+			$query_str = ' WHERE ' . implode(' AND ', $query_opts);
+		}
+
+		$query = 'SELECT * FROM `nodegroup_nodes`';
+		$query .= $query_str;
+		$result = do_mysql_query($query);
+
+		if($result[0] === true) {
+			while($line = mysql_fetch_assoc($result[1])) {
+				ksort($line);
+				$details[] = $line;
+			}
+		} else {
+			$error = $result[1];
+		}
+
+		return array($details, $error);
+	}
+
+	/**
+	 * Return list of available nodegroups
+	 * @param array $params Associative array of fields/values to search for
+	 * @return array Array of nodegroups, error (if any)
+	 */
+	public function listNodegroups($search = array()) {
+		$details = array();
+		$error = false;
+		$query_opts = array();
+		$query_str = '';
+
+		if(!empty($search)) {
+			$available_fields = get_column_names('nodegroups');
+
+			foreach($search as $field => $value) {
+				if(array_key_exists($field, $available_fields)) {
+					$query_opts[] = sprintf("`%s` LIKE '%s'", $field,
+						mysql_real_escape_string($value));
+				}
+			}
+		}
+
+		if(!empty($query_opts)) {
+			$query_str = ' WHERE ' . implode(' AND ', $query_opts);
+		}
+
+		$query = 'SELECT * FROM `nodegroups`';
+		$query .= $query_str;
+		$result = do_mysql_query($query);
+
+		if($result[0] === true) {
+			while($line = mysql_fetch_assoc($result[1])) {
+				ksort($line);
+				$details[] = $line;
+			}
+		} else {
+			$error = $result[1];
+		}
+
+		return array($details, $error);
+	}
+
+	/**
+	 * Return list of available nodes
+	 * @param array $params Associative array of fields/values to search for
+	 * @return array Array of nodes, error (if any)
+	 */
+	public function listNodes($search = array()) {
+		$details = array();
+		$error = false;
+		$query_opts = array();
+		$query_str = '';
+
+		if(!empty($search)) {
+			$available_fields = get_column_names('nodes');
+
+			foreach($search as $field => $value) {
+				if(array_key_exists($field, $available_fields)) {
+					if(is_array($value)) {
+						if(empty($value)) {
+							continue;
+						}
+						$values = array();
+						foreach($value as $t_value) {
+							$values[] = sprintf("'%s'",
+								mysql_real_escape_string($t_value));
+						}
+						$query_opts[] = sprintf("`%s` IN (%s)", $field,
+							implode(',', $values));
+					} else {
+						$query_opts[] = sprintf("`%s` LIKE '%s'", $field,
+							mysql_real_escape_string($value));
+					}
+				}
+			}
+		}
+
+		if(!empty($query_opts)) {
+			$query_str = ' WHERE ' . implode(' AND ', $query_opts);
+		}
+
+		$query = 'SELECT * FROM `nodes`';
+		$query .= $query_str;
+		$result = do_mysql_query($query);
+
+		if($result[0] === true) {
+			while($line = mysql_fetch_assoc($result[1])) {
+				ksort($line);
+				$details[] = $line;
+			}
+		} else {
+			$error = $result[1];
+		}
+
+		return array($details, $error);
+	}
+
+	/**
+	 * List check_commands
+	 * @param array $params Associative array of fields/values to search for
+	 * @param array $fields Fields to include in result
+	 * @return array Array of check_commands, error (if any)
+	 */
+	public function listCheckCommands($search = array(), $fields = array()) {
+		$details = array();
+		$error = false;
+		$fields_as_keys = array();
+		$query_opts = array();
+		$query_str = '';
+
+		if(!empty($fields)) {
+			$fields_as_keys = array_flip($fields);
+		}
+
+		if(!empty($search)) {
+			$available_fields = get_column_names('check_commands');
+
+			foreach($search as $field => $value) {
+				if(array_key_exists($field, $available_fields)) {
+					$query_opts[] = sprintf("`%s` LIKE '%s'", $field,
+						mysql_real_escape_string($value));
+				}
+			}
+		}
+
+		if(!empty($query_opts)) {
+			$query_str = ' WHERE ' . implode(' AND ', $query_opts);
+		}
+
+		$query = 'SELECT * FROM `check_commands`';
+		$query .= $query_str;
+		$result = do_mysql_query($query);
+
+		if($result[0] === true) {
+			while($line = mysql_fetch_assoc($result[1])) {
+				ksort($line);
+				if(empty($fields_as_keys)) {
+					$details[] = $line;
+				} else {
+					$details[] = array_intersect_key($line, $fields_as_keys);
+				}
+			}
+		} else {
+			$error = $result[1];
+		}
+
+		return array($details, $error);
+	}
+}
+?>

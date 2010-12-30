@@ -1,0 +1,43 @@
+#divSearchServices_c.yui-panel-container {
+	position:relative;
+}
+
+#divSearchServices.yui-dialog {
+	position:relative;
+}
+
+#divSearchHistory_c.yui-panel-container {
+	position:relative;
+}
+
+#divSearchHistoryServices.yui-dialog {
+	position:relative;
+}
+
+#divSearchNodegroups_c.yui-panel-container {
+	position:relative;
+}
+
+#divSearchNodegroups.yui-dialog {
+	position:relative;
+}
+
+#divSearchNodes_c.yui-panel-container {
+	position:relative;
+}
+
+#divSearchNodes.yui-dialog {
+	position:relative;
+}
+
+#divCurrentSettings_c.yui-panel-container {
+	position:relative;
+}
+
+#divCurrentSettings.yui-dialog {
+	position:relative;
+}
+
+.acknowledged {
+	text-decoration: line-through;
+}

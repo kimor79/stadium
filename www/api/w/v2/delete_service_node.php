@@ -1,0 +1,76 @@
+<?php
+
+include('Monitoring/includes/rw.inc');
+
+$details = array();
+$node_details = array();
+$query = 'DELETE FROM `service_nodes` WHERE ';
+$query_opts = array();
+$service_details = array();
+
+if(!$ops->isYesNo($_POST['delete'], false)) {
+	print($ops->formatWriteOutput('400', 'delete=yes also needs to be passed to this api'));
+	exit(0);
+}
+
+if(isset($_POST['service_id']) && ctype_digit((string)$_POST['service_id'])) {
+	list($service_details, $junk) = $mon->listServices(array('service_id' => $_POST['service_id']));
+	$service_details = reset($service_details);
+}
+
+if(empty($service_details)) {
+	print($ops->formatWriteOutput('400', 'Missing/Unknown service ID'));
+	exit(0);
+}
+
+if(!$ops->isBlank($_POST['node'])) {
+	list($node_details, $junk) = $mon->listNodes(array('node' => $_POST['node']));
+	$node_details = reset($node_details);
+}
+
+if(empty($node_details)) {
+	print($ops->formatWriteOutput('400', 'Missing/Unknown node'));
+	exit(0);
+}
+
+list($details, $junk) = $mon->listServicesNodes(array(
+	'service_id' => $service_details['service_id'],
+	'node' => $node_details['node'],
+));
+
+if(empty($details)) {
+	print($ops->formatWriteOutput('400', 'Service not configured for that node'));
+	exit(0);
+}
+
+$query_opts[] = sprintf("`service_id` = '%d'", $service_details['service_id']);
+$query_opts[] = sprintf("`node` = '%s'", $node_details['node']);
+
+$query .= implode(' AND ', $query_opts);
+$query .= $post_query;
+$result = do_mysql_query($query);
+
+if($result[0] !== true) {
+	print($ops->formatWriteOutput('500', $result[1]));
+	exit(0);
+}
+
+if(!empty($details)) {
+	$details = reset($details);
+}
+
+$h_error = $history->updateHistory(array(
+	'history_table' => 'service_node_history',
+	'keys' => array('service_id' => $service_details['service_id'], 'node' => $node_details['node']),
+	'old_data' => $details,
+	'new_data' => array(),
+	'source_tables' => array('service_nodes'),
+));
+
+if(!empty($h_error)) {
+	$s_message .= ' but unable to add history: ' . $h_error;
+}
+
+$message = sprintf("%s removed from %s", $node_details['node'], $service_details['service_name']);
+print($ops->formatWriteOutput('200', $message));
+?>
